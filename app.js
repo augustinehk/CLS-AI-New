@@ -1,7 +1,8 @@
 // ============================================================================
-// app.js - Step 3 完整無縫版 (全檔直接覆蓋)
-// 1. 支援自由選擇「消耗 Token 的多聲道真人 AI 語音 (GPT-4o Audio)」或「免 Token 雲端語音」
-// 2. 完整保留「案件生成器」與「審訂工作坊」的角色性別/年齡聲道選擇器，打包時嚴格套用
+// app.js - Step 2 除錯修正版：
+// 1. 修復 Icons.Spinner 內 cy: "12" 語法錯誤
+// 2. 支援「📝 教材審訂及工作坊 (CoursewareEditorModal)」
+// 3. 支援「💾 導出最新 presets.js 永久保存」與「📦 打包下載全套錄音及報告 (.zip)」
 // ============================================================================
 
 (function () {
@@ -46,49 +47,11 @@
         )
     };
 
-    const PERSONA_LABELS = {
-        standard: "👤 常規證人",
-        street_combative: "🔥 市井／情緒化證人",
-        elderly_garrulous: "👵 長者／囉嗦迂迴證人",
-        non_native: "🌏 少數族裔／非地道語法",
-        technical_tribunal: "📐 審裁處／技術專家證人"
-    };
-
-    // 子組件：📝 教材審訂及工作坊全螢幕視窗 (CoursewareEditorModal)
+    // 新增子組件：📝 教材審訂及工作坊全螢幕視窗 (CoursewareEditorModal)
     function CoursewareEditorModal({ editingCase, onClose, onSaveCase, onSaveAndBakeAudio, isBaking }) {
         if (!editingCase) return null;
 
-        const [draft, setDraft] = useState(() => {
-            const copy = JSON.parse(JSON.stringify(editingCase));
-            if (!copy.voice_config) {
-                copy.voice_config = {
-                    counsel_gender: "male",
-                    witness_gender: "female",
-                    witness_age_group: copy.persona === "elderly_garrulous" ? "elderly" : "adult"
-                };
-            }
-            return copy;
-        });
-
-        const handleVoiceConfigChange = (key, val) => {
-            setDraft(prev => {
-                const updatedVc = { ...(prev.voice_config || {}), [key]: val };
-                const updatedDialogue = prev.dialogue.map(turn => {
-                    const isOdd = turn.turn % 2 === 1;
-                    const updatedTurn = { ...turn };
-                    if (isOdd && key === "counsel_gender") {
-                        delete updatedTurn.audio_base64;
-                        updatedTurn.gender = val;
-                    } else if (!isOdd && (key === "witness_gender" || key === "witness_age_group")) {
-                        delete updatedTurn.audio_base64;
-                        if (key === "witness_gender") updatedTurn.gender = val;
-                        if (key === "witness_age_group") updatedTurn.age_group = val;
-                    }
-                    return updatedTurn;
-                });
-                return { ...prev, voice_config: updatedVc, dialogue: updatedDialogue };
-            });
-        };
+        const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(editingCase)));
 
         const handleTurnChange = (idx, field, val) => {
             setDraft(prev => {
@@ -129,10 +92,10 @@
                 h("div", { className: "bg-blue-900 text-white px-6 py-4 flex justify-between items-center" },
                     h("div", null,
                         h("h2", { className: "text-base font-extrabold flex items-center space-x-2" },
-                            h("span", null, "📝 教材審訂、聲線鎖定及工作坊 (Courseware & Voice QA Studio)")
+                            h("span", null, "📝 教材審訂及工作坊 (Courseware Editor & QA Studio)")
                         ),
                         h("p", { className: "text-xs text-blue-200 mt-0.5" },
-                            "您可在此鎖定律師與證人的性別／年齡聲線、設定案件難度與特種證人模式，並微調 20 輪問答與參考譯文。"
+                            "您可在此微調 AI 生成的法庭問答原句、修正 CLS 標準參考譯文及加入本案專屬評分詞彙，確認無誤後才正式採用或合成語音。"
                         )
                     ),
                     h("button", {
@@ -142,7 +105,7 @@
                 ),
 
                 h("div", { className: "p-6 overflow-y-auto space-y-5 flex-1 bg-gray-50" },
-                    h("div", { className: "bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-4" },
+                    h("div", { className: "bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-3" },
                         h("div", { className: "grid grid-cols-1 md:grid-cols-2 gap-3" },
                             h("div", null,
                                 h("label", { className: "block text-xs font-bold text-gray-600 mb-1" }, "案件標題 (中文)"),
@@ -163,70 +126,6 @@
                                 })
                             )
                         ),
-
-                        h("div", { className: "bg-purple-50 border border-purple-200 rounded-xl p-3.5 grid grid-cols-2 md:grid-cols-5 gap-3" },
-                            h("div", null,
-                                h("label", { className: "block text-[11px] font-extrabold text-purple-900 mb-1" }, "📊 難易度分級"),
-                                h("select", {
-                                    value: draft.difficulty || 2,
-                                    onChange: e => setDraft(prev => ({ ...prev, difficulty: Number(e.target.value) })),
-                                    className: "w-full text-xs font-bold p-1.5 border border-purple-300 rounded bg-white text-gray-900"
-                                },
-                                    h("option", { value: 1 }, "Level 1 (入門奠基)"),
-                                    h("option", { value: 2 }, "Level 2 (常規實戰)"),
-                                    h("option", { value: 3 }, "Level 3 (進階高壓)")
-                                )
-                            ),
-                            h("div", null,
-                                h("label", { className: "block text-[11px] font-extrabold text-purple-900 mb-1" }, "🎭 特種證人畫像"),
-                                h("select", {
-                                    value: draft.persona || "standard",
-                                    onChange: e => setDraft(prev => ({ ...prev, persona: e.target.value })),
-                                    className: "w-full text-xs font-bold p-1.5 border border-purple-300 rounded bg-white text-gray-900"
-                                },
-                                    h("option", { value: "standard" }, "👤 常規證人"),
-                                    h("option", { value: "street_combative" }, "🔥 市井／情緒化"),
-                                    h("option", { value: "elderly_garrulous" }, "👵 長者／囉嗦迂迴"),
-                                    h("option", { value: "non_native" }, "🌏 少數族裔口音"),
-                                    h("option", { value: "technical_tribunal" }, "📐 審裁處／專家")
-                                )
-                            ),
-                            h("div", null,
-                                h("label", { className: "block text-[11px] font-extrabold text-purple-900 mb-1" }, "🎙️ 發問方(律師)固定聲線"),
-                                h("select", {
-                                    value: draft.voice_config?.counsel_gender || "male",
-                                    onChange: e => handleVoiceConfigChange("counsel_gender", e.target.value),
-                                    className: "w-full text-xs font-bold p-1.5 border border-purple-300 rounded bg-white text-gray-900"
-                                },
-                                    h("option", { value: "male" }, "👨‍⚖️ 沉穩男聲 (Onyx)"),
-                                    h("option", { value: "female" }, "👩‍⚖️ 幹練女聲 (Alloy)")
-                                )
-                            ),
-                            h("div", null,
-                                h("label", { className: "block text-[11px] font-extrabold text-purple-900 mb-1" }, "🎙️ 證人/事主固定性別"),
-                                h("select", {
-                                    value: draft.voice_config?.witness_gender || "female",
-                                    onChange: e => handleVoiceConfigChange("witness_gender", e.target.value),
-                                    className: "w-full text-xs font-bold p-1.5 border border-purple-300 rounded bg-white text-gray-900"
-                                },
-                                    h("option", { value: "female" }, "👩 女性聲線 (Nova / Shimmer)"),
-                                    h("option", { value: "male" }, "👨 男性聲線 (Echo / Fable)")
-                                )
-                            ),
-                            h("div", null,
-                                h("label", { className: "block text-[11px] font-extrabold text-purple-900 mb-1" }, "🎂 證人年齡與語速特徵"),
-                                h("select", {
-                                    value: draft.voice_config?.witness_age_group || "adult",
-                                    onChange: e => handleVoiceConfigChange("witness_age_group", e.target.value),
-                                    className: "w-full text-xs font-bold p-1.5 border border-purple-300 rounded bg-white text-gray-900"
-                                },
-                                    h("option", { value: "young" }, "青年 (語速明快)"),
-                                    h("option", { value: "adult" }, "成年 (標準語速)"),
-                                    h("option", { value: "elderly" }, "長者 (語速稍慢 0.88x)")
-                                )
-                            )
-                        ),
-
                         h("div", null,
                             h("label", { className: "block text-xs font-bold text-gray-600 mb-1" }, "案情簡介 (中文)"),
                             h("textarea", {
@@ -272,7 +171,7 @@
                                             isEn ? "🇬🇧 英語盤問 ➔ 粵語傳譯" : "🇭🇰 粵語供詞 ➔ 英語傳譯"
                                         ),
                                         turn.audio_base64 && h("span", { className: "bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded" },
-                                            "🎙️ 已有內嵌語音"
+                                            "🎙️ 已有內嵌語音 (若修改原句將自動重新合成)"
                                         )
                                     ),
                                     h("div", { className: "flex items-center space-x-2" },
@@ -333,13 +232,13 @@
                             onClick: () => onSaveCase(draft),
                             disabled: isBaking,
                             className: "bg-blue-900 hover:bg-blue-800 text-white font-bold py-2 px-5 rounded-lg text-xs shadow cursor-pointer disabled:opacity-50"
-                        }, "💾 僅儲存修改並採用"),
+                        }, "💾 僅儲存文字修改並採用"),
 
                         h("button", {
                             onClick: () => onSaveAndBakeAudio(draft),
                             disabled: isBaking,
                             className: "bg-purple-700 hover:bg-purple-800 text-white font-extrabold py-2 px-5 rounded-lg text-xs shadow cursor-pointer disabled:opacity-50"
-                        }, isBaking ? "⏳ 正在按固定聲線合成語音中..." : "🎙️ 儲存修改並按所選語音引擎合成全卷語音 (匯出 JSON)")
+                        }, isBaking ? "⏳ 正在合成語音中..." : "🎙️ 儲存修改並一鍵合成全卷真人語音 (匯出 JSON)")
                     )
                 )
             )
@@ -504,7 +403,6 @@
                 )
             ),
 
-            // 支援自由切換「消耗 Token 的多聲道 AI 語音」或「免 Token 雲端語音」
             h("div", { className: "pt-2 border-t border-gray-100" },
                 h("label", { className: "block text-xs font-bold text-gray-500 mb-1" }, TString.ttsModelLabel),
                 h("select", {
@@ -512,10 +410,12 @@
                     onChange: e => setTtsModel(e.target.value),
                     className: "w-full bg-gray-50 border border-gray-200 rounded p-2 text-xs font-bold text-blue-900 focus:outline-none focus:ring-1 focus:ring-blue-900"
                 },
-                    h("option", { value: "openai/gpt-4o-mini-audio-preview" }, "🎙️ OpenRouter GPT-4o Mini Audio (消耗 Token · 支援男女/長者多聲道情緒)"),
-                    h("option", { value: "openai/gpt-4o-audio-preview" }, "🌟 OpenRouter GPT-4o Audio 旗艦版 (消耗 Token · 最高擬真法庭語氣)"),
-                    h("option", { value: "cloud-free-neural" }, "💎 免 Token 高清粵語/英語發聲 (零成本快速打包預設庫)"),
-                    h("option", { value: "browser" }, "💻 瀏覽器內置機械發音 (僅限離線即時播放)")
+                    h("option", { value: "fish-audio/s2.1-pro" }, "🌟 Fish Audio S2.1 Pro (超自然香港粵語 + 英語)"),
+                    h("option", { value: "fish-audio/s2.1-pro-free" }, "🆓 Fish Audio S2.1 Pro Free (免費測試粵語 + 英語)"),
+                    h("option", { value: "fish-audio/drama-3" }, "🎭 Fish Audio Drama 3 (支援法庭情緒語氣指導)"),
+                    h("option", { value: "elevenlabs/eleven-v4-turbo" }, "🎙️ ElevenLabs v4 Turbo (多語種真人擬真發音)"),
+                    h("option", { value: "openai/gpt-4o-mini-tts-2025-12-15" }, "🤖 OpenAI GPT-4o Mini TTS (支援語氣指令)"),
+                    h("option", { value: "browser" }, "💻 瀏覽器內置機械發音 (離線免 API)")
                 )
             ),
 
@@ -524,11 +424,11 @@
                     h("label", { className: "text-xs font-bold text-gray-500" }, TString.apiKey),
                     h("span", {
                         className: "text-[10px] font-bold px-1.5 py-0.5 rounded " + (openRouterApiKey.trim() ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800")
-                    }, openRouterApiKey.trim() ? "⚡ AI + 多聲道語音已啟用" : "⚙️ 離線/免 Token 模式")
+                    }, openRouterApiKey.trim() ? "⚡ GLM + 真人語音已啟用" : "⚙️ 離線模式")
                 ),
                 h("input", {
                     type: "password",
-                    placeholder: "sk-or-v1-... (同一金鑰通用於 GLM 及多聲道真人發音)",
+                    placeholder: "sk-or-v1-... (同一金鑰通用於 GLM 及真人發音)",
                     value: openRouterApiKey,
                     onChange: e => setOpenRouterApiKey(e.target.value),
                     className: "w-full text-xs p-2 border border-gray-200 rounded bg-gray-50 text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-900"
@@ -559,9 +459,9 @@
             isAdmin && h("div", { className: "bg-purple-50 border border-purple-200 text-purple-900 rounded-lg p-3 mb-3 space-y-2 text-[11px] leading-relaxed" },
                 h("div", null, "💡 管理員工作台已啟用："),
                 h("ul", { className: "list-disc pl-4 space-y-0.5" },
-                    h("li", null, "點擊案件右側 ✏️ 可設定角色性別聲線、難度、特種證人及審訂對白。"),
-                    h("li", null, "點擊 🎙️ 可按您在左側選擇的發聲引擎（付費多聲道或免 Token）合成全卷 20 輪真人語音。"),
-                    h("li", null, "點擊下方按鈕可將目前所有案件直接匯出為最新 presets.js 永久保存！")
+                    h("li", null, "點擊案件右側 ✏️ 可隨時審訂對白文字、參考譯文及本案評分詞彙。"),
+                    h("li", null, "點擊 🎙️ 可合成全卷 20 輪真人粵英發音並嵌入案件。"),
+                    h("li", null, "點擊下方按鈕可將目前所有案件（含新生成案件及內嵌語音）直接匯出為最新 presets.js 永久保存！")
                 ),
                 h("button", {
                     onClick: onExportFullPresetsJs,
@@ -585,7 +485,7 @@
                             isAdmin && h("button", {
                                 onClick: e => { e.stopPropagation(); onOpenEditor(item); },
                                 className: "text-amber-800 hover:text-amber-950 bg-amber-100 hover:bg-amber-200 px-2 py-1 rounded text-xs font-bold shadow-sm",
-                                title: "審訂/編輯此案件的對白、聲線配置與專屬詞彙"
+                                title: "審訂/編輯此案件的對白、參考譯文與專屬詞彙"
                             }, "✏️"),
                             isAdmin && h("button", {
                                 onClick: e => handlePrebakeCaseAudio(e, item),
@@ -607,8 +507,6 @@
 
                         h("div", { className: "flex items-center flex-wrap gap-1.5 mb-1 pr-24" },
                             h("span", { className: "text-xs font-bold text-gray-900" }, lang === "zh" ? item.title_zh : item.title_en),
-                            item.difficulty && h("span", { className: "bg-blue-100 text-blue-900 text-[10px] font-extrabold px-1.5 py-0.5 rounded" }, "L" + item.difficulty),
-                            item.persona && item.persona !== "standard" && h("span", { className: "bg-amber-100 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded" }, PERSONA_LABELS[item.persona] || item.persona),
                             hasPrebaked && h("span", { className: "bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-1.5 py-0.5 rounded" }, "🎙️ 已內嵌真人語音"),
                             item.cls_guidelines && h("span", { className: "bg-indigo-100 text-indigo-800 text-[10px] font-extrabold px-1.5 py-0.5 rounded" }, "📌 附專屬詞彙表")
                         ),
@@ -629,20 +527,17 @@
         userTranslations, setUserTranslations, recordedUrls,
         isGrading, gradeStudentAnswer, onPrevTurn, onNextTurn, onOpenEditor
     }) {
-        const bakedModelName = activeTurn.baked_model ? (activeTurn.baked_model.includes("/") ? activeTurn.baked_model.split("/")[1] : activeTurn.baked_model) : "Pre-baked";
+        const bakedModelName = activeTurn.baked_model ? activeTurn.baked_model.split("/")[1] : "Pre-baked";
         const liveModelName = ttsModel.includes("/") ? ttsModel.split("/")[1] : ttsModel;
         const maxTurns = Math.min(practiceTurnsLimit, currentCase.dialogue.length);
         const isLastTurn = currentTurnIdx >= maxTurns - 1;
-        const voiceProf = CLS_SERVICES.resolveVoiceProfile(activeTurn, currentCase, activeTurn.turn % 2 === 1 ? "questioner" : "answerer");
 
         return h("div", { className: "bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col" },
             h("div", { className: "bg-blue-900 text-white px-5 py-3 flex justify-between items-center flex-wrap gap-2" },
-                h("div", { className: "text-xs font-bold uppercase tracking-wider flex items-center flex-wrap gap-2" },
+                h("div", { className: "text-xs font-bold uppercase tracking-wider flex items-center space-x-2" },
                     h("span", { className: "w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" }),
                     h("span", { className: "text-white" }, TString.courtRoom),
-                    currentCase.difficulty && h("span", { className: "bg-blue-700 text-amber-300 text-[10px] font-extrabold px-2 py-0.5 rounded" }, "Level " + currentCase.difficulty),
-                    currentCase.persona && currentCase.persona !== "standard" && h("span", { className: "bg-purple-700 text-white text-[10px] font-extrabold px-2 py-0.5 rounded" }, PERSONA_LABELS[currentCase.persona] || currentCase.persona),
-                    isBlindMode && h("span", { className: "bg-amber-500 text-blue-900 text-[10px] font-extrabold px-2 py-0.5 rounded" }, "🎧 盲聽考核模式"),
+                    isBlindMode && h("span", { className: "bg-amber-500 text-blue-900 text-[10px] font-extrabold px-2 py-0.5 rounded ml-2" }, "🎧 盲聽考核模式"),
                     isDeferredEvalMode && !isSessionRevealed && h("span", { className: "bg-indigo-400 text-blue-950 text-[10px] font-extrabold px-2 py-0.5 rounded" },
                         pendingBgGradesCount > 0 ? ("⏳ 背景預審中 (" + pendingBgGradesCount + " 題)...") : "⚡ 連貫實戰模式"
                     )
@@ -652,8 +547,8 @@
                     h("button", {
                         onClick: () => onOpenEditor(currentCase),
                         className: "bg-blue-800 hover:bg-blue-700 text-amber-300 text-[11px] font-bold px-2 py-0.5 rounded border border-blue-600 cursor-pointer",
-                        title: "審訂對白、參考譯文或調整角色固定聲線"
-                    }, "✏️ 審訂教材/聲線")
+                        title: "審訂或修改此案件的對白與參考譯文"
+                    }, "✏️ 審訂教材")
                 )
             ),
 
@@ -663,12 +558,9 @@
                         h("div", { className: "text-xs font-extrabold text-blue-900 uppercase flex items-center flex-wrap gap-2" },
                             h("span", null, lang === "zh" ? activeTurn.role_zh : activeTurn.role_en),
                             h("span", { className: "text-gray-500 font-normal" }, "Turn " + activeTurn.turn + " / " + maxTurns),
-                            h("span", { className: "bg-gray-200 text-gray-700 text-[10px] px-2 py-0.5 rounded font-bold" },
-                                (voiceProf.gender === "female" ? "👩 女聲 (" + voiceProf.openaiVoice + ")" : "👨 男聲 (" + voiceProf.openaiVoice + ")") + (voiceProf.ageGroup === "elderly" ? " · 長者語速" : "")
-                            ),
                             activeTurn.audio_base64
                                 ? h("span", { className: "bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded font-bold" }, "📦 離線預載真人語音 (" + bakedModelName + ")")
-                                : (ttsModel !== "browser" && h("span", { className: "bg-indigo-100 text-indigo-800 text-[10px] px-2 py-0.5 rounded font-bold" }, "🎙️ " + liveModelName + " 即時發聲")),
+                                : (openRouterApiKey.trim() && ttsModel !== "browser" && h("span", { className: "bg-indigo-100 text-indigo-800 text-[10px] px-2 py-0.5 rounded font-bold" }, "🎙️ " + liveModelName + " 即時真人發聲")),
                             isBlindMode && isSourceTextHidden && h("button", {
                                 onClick: () => setPeekTurnMap(prev => ({ ...prev, [activeTurn.turn]: !prev[activeTurn.turn] })),
                                 className: "ml-auto text-[11px] font-bold text-amber-700 hover:text-amber-900 bg-amber-100 hover:bg-amber-200 px-2.5 py-0.5 rounded transition-all cursor-pointer"
@@ -825,9 +717,6 @@
     function ImporterAndDashboard({
         TString, lang, handleDocUpload, openRouterApiKey, setOpenRouterApiKey,
         customBriefText, setCustomBriefText, saveToCategory, setSaveToCategory,
-        genVenue, setGenVenue, genDifficulty, setGenDifficulty,
-        genPersona, setGenPersona, genCounselGender, setGenCounselGender,
-        genWitnessGender, setGenWitnessGender,
         autoBakeOnGenerate, setAutoBakeOnGenerate,
         handleAISummonCourtroom, isGeneratingCase, activeDialogueSlice,
         handleOpenHTMLReport, handleDownloadSessionZip,
@@ -939,80 +828,10 @@
 
             h("div", { className: "bg-white rounded-xl p-5 border border-gray-200 shadow-sm space-y-4 animate-fade-in" },
                 h("h2", { className: "text-sm font-bold text-blue-900 flex items-center space-x-2 border-b border-gray-200 pb-2" },
-                    h("span", { className: "text-blue-900 uppercase" }, TString.customImportTitle + " — 分級與特種證人出題引擎")
+                    h("span", { className: "text-blue-900 uppercase" }, TString.customImportTitle)
                 ),
                 h("p", { className: "text-xs text-gray-600 leading-relaxed" },
-                    "上載案情摘要或直接貼上控罪事實，並選擇目標「審訊場所」、「難易度分級」、「特種證人畫像」及「固定性別聲線」。生成後會自動彈出審訂工作坊。"
-                ),
-
-                h("div", { className: "bg-blue-50/70 border border-blue-200 rounded-xl p-3.5 grid grid-cols-1 md:grid-cols-5 gap-3" },
-                    h("div", null,
-                        h("label", { className: "block text-[11px] font-extrabold text-blue-900 mb-1" }, "🏛️ 1. 審訊場所 (Venue)"),
-                        h("select", {
-                            value: genVenue,
-                            onChange: e => {
-                                const v = e.target.value;
-                                setGenVenue(v);
-                                if (v === "tribunal") {
-                                    setSaveToCategory("civil");
-                                    setGenPersona("technical_tribunal");
-                                }
-                            },
-                            className: "w-full text-xs font-bold p-2 border border-blue-300 rounded bg-white text-gray-900"
-                        },
-                            h("option", { value: "magistrates" }, "⚖️ 裁判法院 / 區域法院"),
-                            h("option", { value: "tribunal" }, "🏛️ 審裁處 (勞資/土地/小額)")
-                        )
-                    ),
-                    h("div", null,
-                        h("label", { className: "block text-[11px] font-extrabold text-blue-900 mb-1" }, "📊 2. 難易度 (Difficulty)"),
-                        h("select", {
-                            value: genDifficulty,
-                            onChange: e => setGenDifficulty(Number(e.target.value)),
-                            className: "w-full text-xs font-bold p-2 border border-blue-300 rounded bg-white text-gray-900"
-                        },
-                            h("option", { value: 1 }, "Level 1: 基礎入門 (短句)"),
-                            h("option", { value: 2 }, "Level 2: 常規實戰 (標準)"),
-                            h("option", { value: 3 }, "Level 3: 進階高壓 (複合陷阱)")
-                        )
-                    ),
-                    h("div", null,
-                        h("label", { className: "block text-[11px] font-extrabold text-blue-900 mb-1" }, "🎭 3. 特種證人 (Persona)"),
-                        h("select", {
-                            value: genPersona,
-                            onChange: e => setGenPersona(e.target.value),
-                            className: "w-full text-xs font-bold p-2 border border-blue-300 rounded bg-white text-gray-900"
-                        },
-                            h("option", { value: "street_combative" }, "🔥 市井／情緒化證人"),
-                            h("option", { value: "elderly_garrulous" }, "👵 長者／囉嗦迂迴證人"),
-                            h("option", { value: "non_native" }, "🌏 少數族裔／非地道語法"),
-                            h("option", { value: "technical_tribunal" }, "📐 審裁處／技術專家證人"),
-                            h("option", { value: "standard" }, "👤 常規標準證人")
-                        )
-                    ),
-                    h("div", null,
-                        h("label", { className: "block text-[11px] font-extrabold text-blue-900 mb-1" }, "🎙️ 4. 律師/審裁官聲線"),
-                        h("select", {
-                            value: genCounselGender,
-                            onChange: e => setGenCounselGender(e.target.value),
-                            className: "w-full text-xs font-bold p-2 border border-blue-300 rounded bg-white text-gray-900"
-                        },
-                            h("option", { value: "male" }, "👨‍⚖️ 固定男聲 (Onyx)"),
-                            h("option", { value: "female" }, "👩‍⚖️ 固定女聲 (Alloy)")
-                        )
-                    ),
-                    h("div", null,
-                        h("label", { className: "block text-[11px] font-extrabold text-blue-900 mb-1" }, "🎙️ 5. 證人/事主性別聲線"),
-                        h("select", {
-                            value: genWitnessGender,
-                            onChange: e => setGenWitnessGender(e.target.value),
-                            className: "w-full text-xs font-bold p-2 border border-blue-300 rounded bg-white text-gray-900"
-                        },
-                            h("option", { value: "auto" }, "🤖 依案情自動判斷 (如風化案女聲)"),
-                            h("option", { value: "female" }, "👩 強制鎖定女聲 (Nova/Shimmer)"),
-                            h("option", { value: "male" }, "👨 強制鎖定男聲 (Echo/Fable)")
-                        )
-                    )
+                    "上載起訴書、案情摘要或已匯出的 JSON 教材。AI 生成 20 輪問答後，系統會自動彈出「📝 教材審訂工作坊」供您檢視及微調字眼，再合成真人語音。"
                 ),
 
                 h("div", { className: "grid grid-cols-1 md:grid-cols-2 gap-4" },
@@ -1066,7 +885,7 @@
                                 onChange: e => setAutoBakeOnGenerate(e.target.checked),
                                 className: "rounded text-purple-700"
                             }),
-                            h("span", null, "🎙️ 生成文字後立即按所選引擎與角色聲線合成全卷語音")
+                            h("span", null, "🎙️ 生成文字後立即自動合成全卷語音並打包")
                         )
                     ),
                     h("button", {
@@ -1129,12 +948,6 @@
             return localStorage.getItem("cls_custom_rubric") || CLS_SERVICES.DEFAULT_CLS_RUBRIC;
         });
 
-        const [genVenue, setGenVenue] = useState("magistrates");
-        const [genDifficulty, setGenDifficulty] = useState(2);
-        const [genPersona, setGenPersona] = useState("street_combative");
-        const [genCounselGender, setGenCounselGender] = useState("male");
-        const [genWitnessGender, setGenWitnessGender] = useState("auto");
-
         const [editingCaseModalData, setEditingCaseModalData] = useState(null);
         const [autoBakeOnGenerate, setAutoBakeOnGenerate] = useState(false);
 
@@ -1146,9 +959,10 @@
         const [bakingProgress, setBakingProgress] = useState("");
 
         const [voices, setVoices] = useState([]);
+        const [voiceA, setVoiceA] = useState("");
+        const [voiceB, setVoiceB] = useState("");
         const [speechRate, setSpeechRate] = useState(1.0);
-        // 預設使用支援男女/長者多聲道情緒的 OpenRouter GPT-4o Mini Audio
-        const [ttsModel, setTtsModel] = useState("openai/gpt-4o-mini-audio-preview");
+        const [ttsModel, setTtsModel] = useState("fish-audio/s2.1-pro");
         const [isPlayingTTS, setIsPlayingTTS] = useState(false);
 
         const [practiceTurnsLimit, setPracticeTurnsLimit] = useState(20);
@@ -1172,7 +986,7 @@
 
         const [customBriefText, setCustomBriefText] = useState("");
         const [isGeneratingCase, setIsGeneratingCase] = useState(false);
-        const [saveToCategory, setSaveToCategory] = useState("criminal");
+        const [saveToCategory, setSaveToCategory] = useState("custom");
         const [openRouterApiKey, setOpenRouterApiKey] = useState(() => {
             return localStorage.getItem("cls_openrouter_api_key") || "";
         });
@@ -1195,6 +1009,12 @@
                 const allVoices = window.speechSynthesis.getVoices();
                 const filtered = allVoices.filter(v => v.lang.toLowerCase().startsWith("en") || v.lang.toLowerCase().startsWith("zh") || v.lang.toLowerCase().includes("yue"));
                 setVoices(filtered);
+                if (filtered.length > 0) {
+                    const enVoice = filtered.find(v => v.lang.toLowerCase().includes("en"));
+                    const zhVoice = filtered.find(v => v.lang.toLowerCase().includes("zh-hk") || v.lang.toLowerCase().includes("yue"));
+                    setVoiceA(enVoice ? enVoice.name : filtered[0].name);
+                    setVoiceB(zhVoice ? zhVoice.name : filtered[0].name);
+                }
             };
             loadVoices();
             if (window.speechSynthesis.onvoiceschanged !== undefined) window.speechSynthesis.onvoiceschanged = loadVoices;
@@ -1275,22 +1095,20 @@
             setEditingCaseModalData(null);
         };
 
-        // 預先合成全卷真人語音 (支援付費多聲道 AI 語音或免 Token 雲端語音)
         const handlePrebakeCaseAudio = async (e, caseItem, skipConfirm = false) => {
             if (e) e.stopPropagation();
             const apiToUse = openRouterApiKey.trim();
-
-            if (ttsModel === "browser") {
-                alert("請先在左側「🗣️ 法庭真人發聲引擎」選擇 OpenRouter 真人語音模型或免 Token 雲端發聲，而非瀏覽器機械發音。");
+            if (!apiToUse) {
+                alert("請先在左側「訓練設定」輸入有效的 OpenRouter API 金鑰，方可預先合成全卷真人語音！");
                 return;
             }
-            if (ttsModel !== "cloud-free-neural" && !apiToUse) {
-                alert("您目前選擇了消耗 Token 的 OpenRouter 真人語音引擎，請先在左側輸入有效的 OpenRouter API 金鑰（或切換為「💎 免 Token 高清發聲」）。");
+            if (ttsModel === "browser") {
+                alert("請先在左側「法庭真人發聲引擎」選擇 OpenRouter 真人語音模型（例如 Fish Audio S2.1 Pro），而非瀏覽器內置發音。");
                 return;
             }
 
             const totalTurns = caseItem.dialogue.length;
-            if (!skipConfirm && !confirm("🎙️ 確定要使用「" + ttsModel + "」並按鎖定角色性別聲線為「" + caseItem.title_zh + "」合成全部 " + totalTurns + " 輪真人語音嗎？")) {
+            if (!skipConfirm && !confirm("🎙️ 確定要為「" + caseItem.title_zh + "」合成全部 " + totalTurns + " 輪真人語音並打包成離線 JSON 教材嗎？")) {
                 return;
             }
 
@@ -1309,15 +1127,7 @@
                     const textToSpeak = turn.lang === "en-US" ? turn.text_en : turn.text_zh;
                     const roleType = turn.turn % 2 === 1 ? "questioner" : "answerer";
 
-                    const audioBlob = await CLS_SERVICES.requestOpenRouterTTSBlob(
-                        textToSpeak,
-                        turn.lang,
-                        roleType,
-                        apiToUse,
-                        ttsModel,
-                        turn,
-                        caseItem
-                    );
+                    const audioBlob = await CLS_SERVICES.requestOpenRouterTTSBlob(textToSpeak, turn.lang, roleType, apiToUse, ttsModel);
                     const base64AudioUrl = await CLS_SERVICES.blobToBase64(audioBlob);
 
                     updatedDialogue.push({
@@ -1343,7 +1153,7 @@
                 setEditingCaseModalData(null);
 
                 handleExportPreset(null, bakedCase);
-                alert("✅ 語音合成及打包完成！\n已自動下載帶有內嵌真人語音的 JSON 教材檔。\n💡 若想將此教材連同語音永久寫入預設庫，請點擊左側「💾 導出最新 presets.js 原始碼檔案」！");
+                alert("✅ 語音合成及打包完成！\n已自動下載帶有內嵌真人語音的 JSON 教材檔。\n💡 若想將此教材永久寫入系統預設庫，請在左側教材庫點擊「💾 導出最新 presets.js 原始碼檔案」！");
             } catch (err) {
                 console.error("Pre-baking audio failed:", err);
                 alert("❌ 合成語音中途失敗：" + err.message);
@@ -1353,29 +1163,12 @@
             }
         };
 
-        const playBrowserFallbackSound = (text, langCode, speakerRole, turnObj) => {
+        const playBrowserFallbackSound = (text, langCode, speakerRole) => {
             window.speechSynthesis.cancel();
             const utterance = new SpeechSynthesisUtterance(text);
-            const prof = CLS_SERVICES.resolveVoiceProfile(turnObj, currentCase, speakerRole);
-
-            const isCantonese = langCode === "zh-HK";
-            const langVoices = voices.filter(v => isCantonese
-                ? (v.lang.toLowerCase().includes("hk") || v.lang.toLowerCase().includes("yue") || v.lang.toLowerCase().includes("zh"))
-                : v.lang.toLowerCase().startsWith("en")
-            );
-
-            let matchedVoice = null;
-            if (prof.gender === "female") {
-                matchedVoice = langVoices.find(v => /(female|hiumaan|hiugaai|sin-ji|ting|samantha|victoria|sonia|hazel|zira)/i.test(v.name));
-            } else {
-                matchedVoice = langVoices.find(v => /(male|wanlung|daniel|george|ryan|david|james|sam)/i.test(v.name));
-            }
-            if (!matchedVoice && langVoices.length > 0) {
-                matchedVoice = langVoices[0];
-            }
-
-            if (matchedVoice) utterance.voice = matchedVoice;
-            utterance.rate = Number((speechRate * prof.rateModifier).toFixed(2));
+            const selectedVoice = speakerRole === "questioner" ? voices.find(v => v.name === voiceA) : voices.find(v => v.name === voiceB);
+            if (selectedVoice) utterance.voice = selectedVoice;
+            utterance.rate = speechRate;
             utterance.lang = langCode;
             window.speechSynthesis.speak(utterance);
         };
@@ -1383,8 +1176,6 @@
         const playOriginalSound = async (turnObj, speakerRole) => {
             const text = turnObj.lang === "en-US" ? turnObj.text_en : turnObj.text_zh;
             const langCode = turnObj.lang;
-            const prof = CLS_SERVICES.resolveVoiceProfile(turnObj, currentCase, speakerRole);
-            const effectiveRate = Number((speechRate * prof.rateModifier).toFixed(2));
 
             window.speechSynthesis.cancel();
             if (ttsAudioPlayerRef.current) {
@@ -1394,22 +1185,22 @@
 
             if (turnObj.audio_base64) {
                 const prebakedAudio = new Audio(turnObj.audio_base64);
-                prebakedAudio.playbackRate = effectiveRate;
+                prebakedAudio.playbackRate = speechRate;
                 ttsAudioPlayerRef.current = prebakedAudio;
                 prebakedAudio.play();
                 return;
             }
 
-            if (ttsModel === "browser") {
-                playBrowserFallbackSound(text, langCode, speakerRole, turnObj);
+            const apiToUse = openRouterApiKey.trim();
+            if (!apiToUse || ttsModel === "browser") {
+                playBrowserFallbackSound(text, langCode, speakerRole);
                 return;
             }
 
-            const apiToUse = openRouterApiKey.trim();
-            const cacheKey = ttsModel + "_" + langCode + "_" + prof.openaiVoice + "_" + prof.ageGroup + "_" + text;
+            const cacheKey = ttsModel + "_" + langCode + "_" + speakerRole + "_" + text;
             if (ttsCacheRef.current[cacheKey]) {
                 const cachedAudio = new Audio(ttsCacheRef.current[cacheKey]);
-                cachedAudio.playbackRate = effectiveRate;
+                cachedAudio.playbackRate = speechRate;
                 ttsAudioPlayerRef.current = cachedAudio;
                 cachedAudio.play();
                 return;
@@ -1417,25 +1208,17 @@
 
             setIsPlayingTTS(true);
             try {
-                const audioBlob = await CLS_SERVICES.requestOpenRouterTTSBlob(
-                    text,
-                    langCode,
-                    speakerRole,
-                    apiToUse,
-                    ttsModel,
-                    turnObj,
-                    currentCase
-                );
+                const audioBlob = await CLS_SERVICES.requestOpenRouterTTSBlob(text, langCode, speakerRole, apiToUse, ttsModel);
                 const audioUrl = URL.createObjectURL(audioBlob);
                 ttsCacheRef.current[cacheKey] = audioUrl;
 
                 const audio = new Audio(audioUrl);
-                audio.playbackRate = effectiveRate;
+                audio.playbackRate = speechRate;
                 ttsAudioPlayerRef.current = audio;
                 await audio.play();
             } catch (err) {
-                console.warn("Natural TTS failed, falling back to browser voice:", err);
-                playBrowserFallbackSound(text, langCode, speakerRole, turnObj);
+                console.warn("OpenRouter Natural TTS failed, falling back to browser voice:", err);
+                playBrowserFallbackSound(text, langCode, speakerRole);
             } finally {
                 setIsPlayingTTS(false);
             }
@@ -1582,12 +1365,7 @@
                     apiToUse,
                     "z-ai/glm-4.5-air",
                     customRubric,
-                    currentCase.cls_guidelines || "",
-                    {
-                        difficulty: currentCase.difficulty || 2,
-                        persona: currentCase.persona || "standard",
-                        venue: currentCase.venue || "magistrates"
-                    }
+                    currentCase.cls_guidelines || ""
                 );
                 setAiEvaluations(prev => ({ ...prev, [turnIdx]: glmResult }));
                 return glmResult;
@@ -1697,13 +1475,6 @@
 
             setIsGeneratingCase(true);
             const apiToUse = openRouterApiKey.trim();
-            const genConfig = {
-                venue: genVenue,
-                difficulty: genDifficulty,
-                persona: genPersona,
-                counselGender: genCounselGender,
-                witnessGender: genWitnessGender
-            };
 
             const finalizeNewCase = async (newCaseObj) => {
                 setPresets(prev => [newCaseObj, ...prev]);
@@ -1715,7 +1486,7 @@
                 setPeekTurnMap({});
                 setIsSessionRevealed(false);
 
-                if (autoBakeOnGenerate && ttsModel !== "browser") {
+                if (autoBakeOnGenerate && apiToUse && ttsModel !== "browser") {
                     await handlePrebakeCaseAudio(null, newCaseObj, true);
                 } else {
                     setEditingCaseModalData(newCaseObj);
@@ -1723,19 +1494,19 @@
             };
 
             if (!apiToUse) {
-                const mockObj = CLS_SERVICES.generateLocalMockCase(customBriefText, saveToCategory, genConfig);
+                const mockObj = CLS_SERVICES.generateLocalMockCase(customBriefText, saveToCategory);
                 await finalizeNewCase(mockObj);
                 setIsGeneratingCase(false);
                 return;
             }
 
             try {
-                const glmCase = await CLS_SERVICES.generateCaseWithGLM(customBriefText, saveToCategory, apiToUse, "z-ai/glm-4.5-air", genConfig);
+                const glmCase = await CLS_SERVICES.generateCaseWithGLM(customBriefText, saveToCategory, apiToUse);
                 await finalizeNewCase(glmCase);
             } catch (err) {
                 console.warn("OpenRouter GLM generation failed, fallback to local mock generator.", err);
                 alert("GLM API 調用失敗，已自動切換為本地模擬生成。\n錯誤詳情: " + err.message);
-                const mockObj = CLS_SERVICES.generateLocalMockCase(customBriefText, saveToCategory, genConfig);
+                const mockObj = CLS_SERVICES.generateLocalMockCase(customBriefText, saveToCategory);
                 await finalizeNewCase(mockObj);
             } finally {
                 setIsGeneratingCase(false);
@@ -1902,16 +1673,6 @@
                         setCustomBriefText,
                         saveToCategory,
                         setSaveToCategory,
-                        genVenue,
-                        setGenVenue,
-                        genDifficulty,
-                        setGenDifficulty,
-                        genPersona,
-                        setGenPersona,
-                        genCounselGender,
-                        setGenCounselGender,
-                        genWitnessGender,
-                        setGenWitnessGender,
                         autoBakeOnGenerate,
                         setAutoBakeOnGenerate,
                         handleAISummonCourtroom,
