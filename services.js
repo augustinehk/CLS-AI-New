@@ -1,8 +1,9 @@
 // ============================================================================
-// services.js - Step 3 升級版：
-// 1. 植入「分級難易度 (Level 1-3) + 裁判法院/審裁處 + 特種證人畫像」動態出題引擎
-// 2. 植入「動態寬容度與特種證人專項指標」強化版 AI 評核引擎
-// 3. 植入「固定角色聲線鎖定 (Voice Config)」：徹底解決男女聲錯配及每題聲線跳躍問題
+// services.js - 穩定語音基底 + 分級/場所/特種證人案情生成與評核升級版
+// 1. 100% 保持原有穩定版 TTS 語音請求與打包邏輯 (絕不改動聲線參數)
+// 2. 植入「審訊場所 (Venue)、難易度 (Level 1-3)、特種證人畫像 (Persona)」出題與評核條款
+// 3. 支援注入「CLS 自訂評分準則與詞彙表 (customRubric)」至 AI 評核引擎
+// 4. 保留 exportFullPresetsJsFile() 及 exportStudentSessionZip()
 // ============================================================================
 
 window.CLS_SERVICES = {
@@ -24,74 +25,8 @@ window.CLS_SERVICES = {
    - "cautioned statement / record" -> 「警誡供詞／會面紀錄」
    - "wages in lieu of notice" -> 「代通知金」
 3. 證人供詞傳譯原則：
-   - 必須保留證人原話的防禦情緒、否認力度及地道廣東話俗語（如：砌生豬肉、屈得就屈、陷我於不義、大石砸死蟹）的語意，不可擅自淨化或改寫成平淡書面語。
+   - 必須保留證人原話的防禦情緒、否認力度及地道廣東話俗語（如：砌生豬肉、屈得就屈、陷我於不義、大石砸死蟹、食死貓）的語意，不可擅自淨化或改寫成平淡書面語。
    - 英語傳譯過去發生的案情時，必須嚴格使用過去式（Past Tense）。`,
-
-    // 根據案件的 voice_config 與單題角色，解析出唯一固定的聲線與語氣參數
-    resolveVoiceProfile(turnObj, caseObj, fallbackRole) {
-        const vc = (caseObj && caseObj.voice_config) || {};
-        const isQuestioner = fallbackRole === "questioner" || (turnObj && turnObj.turn % 2 === 1);
-
-        const gender = (turnObj && turnObj.gender)
-            || (isQuestioner ? (vc.counsel_gender || "male") : (vc.witness_gender || "female"));
-
-        const ageGroup = (turnObj && turnObj.age_group)
-            || (isQuestioner ? "adult" : (vc.witness_age_group || "adult"));
-
-        const persona = (caseObj && caseObj.persona) || "standard";
-
-        // 1. OpenAI TTS 固定聲線映射
-        let openaiVoice = "onyx";
-        if (isQuestioner) {
-            openaiVoice = gender === "female" ? "alloy" : "onyx";
-        } else {
-            if (gender === "female") {
-                openaiVoice = ageGroup === "elderly" ? "shimmer" : "nova";
-            } else {
-                openaiVoice = ageGroup === "elderly" ? "fable" : "echo";
-            }
-        }
-
-        // 2. ElevenLabs 固定聲線映射
-        let elevenVoice = isQuestioner
-            ? (gender === "female" ? "rachel" : "george")
-            : (gender === "female" ? "lily" : "callum");
-
-        // 3. 公開/微軟神經語音 (Edge/Azure Neural) 固定聲線映射
-        const isCantonese = turnObj && turnObj.lang === "zh-HK";
-        let neuralVoice = "";
-        if (isCantonese) {
-            if (gender === "female") {
-                neuralVoice = ageGroup === "elderly" ? "zh-HK-HiuGaaiNeural" : "zh-HK-HiuMaanNeural";
-            } else {
-                neuralVoice = "zh-HK-WanLungNeural";
-            }
-        } else {
-            if (gender === "female") {
-                neuralVoice = "en-GB-SoniaNeural";
-            } else {
-                neuralVoice = isQuestioner ? "en-GB-RyanNeural" : "en-HK-SamNeural";
-            }
-        }
-
-        // 4. 針對長者或高壓模式的語速微調倍率
-        let rateModifier = 1.0;
-        if (!isQuestioner && (ageGroup === "elderly" || persona === "elderly")) {
-            rateModifier = 0.88; // 長者證人語速稍慢、帶停頓感
-        } else if (isQuestioner && caseObj && Number(caseObj.difficulty) === 3) {
-            rateModifier = 1.08; // Level 3 高壓盤問律師語速加快
-        }
-
-        return {
-            gender,
-            ageGroup,
-            persona,
-            openaiVoice,
-            elevenVoice,
-            neuralVoice,
-            rateModifier
-        };
-    },
 
     async fetchAvailableGlmModels() {
         if (this.discoveredGlmModels && this.discoveredGlmModels.length > 0) {
@@ -199,7 +134,7 @@ window.CLS_SERVICES = {
 
         if (lengthRatio < 0.4) {
             accuracy -= 1.2; tone -= 1.0; legal -= 1.0;
-            improvements.push("譯文長度嚴重不足。請確保將原聲陳述的所有實質性事實、細節全數譯出，切勿擅自刪減證人供詞。");
+            improvements.push("譯文長度嚴重不足。請確保將原聲陳述的所有實質性事實、細節全數譯出。");
         } else if (lengthRatio > 1.6) {
             delivery -= 1.2;
             improvements.push("譯文存在冗餘或贅述（Garrulous Interpretation）。法庭傳譯應追求精練準確，避免過度解說。");
@@ -257,7 +192,7 @@ window.CLS_SERVICES = {
             if (missingNum) {
                 accuracy -= 1.0;
                 legal -= 0.5;
-                improvements.push("⚠️ 嚴重警告：漏譯案情關鍵核心數字（如距離、時間、金額、次數）。在司法定罪評估中，數字出錯屬於嚴重失實。");
+                improvements.push("⚠️ 嚴重警告：漏譯案情關鍵核心數字（如距離、時間、次數）。在司法定罪評估中，數字出錯屬於嚴重失實。");
             }
         }
 
@@ -296,7 +231,6 @@ window.CLS_SERVICES = {
             preferredModel,
             "z-ai/glm-4.5-air",
             "z-ai/glm-4.5",
-            "qwen/qwen-2.5-72b-instruct",
             "thudm/glm-4-32b",
             "deepseek/deepseek-chat"
         ].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i);
@@ -352,38 +286,27 @@ window.CLS_SERVICES = {
         throw lastError || new Error("所有 AI 模型節點均無法連線");
     },
 
-    // 4. OpenRouter TTS 真人語音合成請求 (升級：強制綁定角色性別、年齡與聲線，確保全卷 20 題聲音一致！)
-    async requestOpenRouterTTSBlob(text, langCode, speakerRole, apiToUse, selectedModel, turnObj = null, caseObj = null) {
+    // 4. OpenRouter TTS 真人語音合成請求 (100% 原封不動保留穩定版邏輯)
+    async requestOpenRouterTTSBlob(text, langCode, speakerRole, apiToUse, selectedModel) {
         const isCantonese = langCode === "zh-HK";
-        const voiceProfile = this.resolveVoiceProfile(turnObj, caseObj, speakerRole);
-
         let requestBody = {
             model: selectedModel,
             input: text,
-            response_format: "mp3",
-            // 鎖定固定 voice 參數，防止後端隨機抽樣不同男女聲
-            voice: voiceProfile.openaiVoice
+            response_format: "mp3"
         };
 
-        const genderDesc = voiceProfile.gender === "female" ? "female" : "male";
-        const ageDesc = voiceProfile.ageGroup === "elderly"
-            ? "elderly (65+ years old, slower, slightly weary voice)"
-            : (voiceProfile.ageGroup === "young" ? "young adult (20s)" : "middle-aged adult");
-
-        if (selectedModel.startsWith("fish-audio/")) {
-            // 在 Fish Audio 中注入固定性別與年齡聲線提示標籤
-            const personaTag = isCantonese
-                ? `[consistent Hong Kong Cantonese ${genderDesc} speaker, ${ageDesc}, ${speakerRole === "questioner" ? "formal courtroom officer" : "emotional courtroom witness"}] `
-                : `[consistent British-accented Hong Kong legal English ${genderDesc} speaker, assertive courtroom counsel] `;
-            requestBody.input = selectedModel === "fish-audio/drama-3" ? (personaTag + text) : text;
-            requestBody.voice = voiceProfile.neuralVoice;
+        if (selectedModel === "fish-audio/drama-3") {
+            const directionTag = isCantonese
+                ? "[natural Hong Kong Cantonese speaker, emotional courtroom witness tone] "
+                : "[assertive, formal Hong Kong courtroom counsel speaking British-accented legal English] ";
+            requestBody.input = directionTag + text;
         } else if (selectedModel.startsWith("elevenlabs/")) {
-            requestBody.voice = voiceProfile.elevenVoice;
+            requestBody.voice = speakerRole === "questioner" ? "george" : "lily";
         } else if (selectedModel.startsWith("openai/")) {
-            requestBody.voice = voiceProfile.openaiVoice;
+            requestBody.voice = speakerRole === "questioner" ? "onyx" : "nova";
             requestBody.instructions = isCantonese
-                ? `Speak in authentic Hong Kong Cantonese (廣東話) as a ${ageDesc} ${genderDesc}. Maintain a consistent voice identity and realistic courtroom witness emotion.`
-                : `Speak in formal Hong Kong common-law courtroom English as a ${genderDesc} counsel.`;
+                ? "Speak in authentic, natural Hong Kong Cantonese (廣東話) with realistic courtroom witness emotion and colloquial tone."
+                : "Speak in a formal, assertive common-law courtroom barrister tone.";
         }
 
         const response = await fetch("https://openrouter.ai/api/v1/audio/speech", {
@@ -414,7 +337,7 @@ window.CLS_SERVICES = {
         }
     },
 
-    // 5. 強化版評核引擎 API (支援依難易度 Level 1-3 及特種證人 Persona 動態校準評分)
+    // 5. OpenRouter GLM 語意核證點評 API (支援依審訊場所、難易度 Level 1-3 及特種證人畫像動態評核)
     async evaluateWithGLM(answer, turnData, apiToUse, preferredGlmModel = "z-ai/glm-4.5-air", customRubric = "", caseGlossary = "", caseMeta = {}) {
         const isEnSource = turnData.lang === "en-US";
         const sourceText = isEnSource ? turnData.text_en : turnData.text_zh;
@@ -427,7 +350,7 @@ window.CLS_SERVICES = {
         const courtVenue = caseMeta.venue || "magistrates";
 
         const evalSystemPrompt = `You are a Principal Court Interpreter Assessor for the Court Language Section (法庭語文組 CLS) of the Hong Kong Judiciary.
-Evaluate the trainee's liaison interpretation strictly according to Hong Kong judicial standards, the mandatory CLS Rubric, and the calibrated Difficulty & Witness Persona parameters below.
+Evaluate the trainee's liaison interpretation strictly according to Hong Kong judicial interpreting standards, the mandatory CLS Rubric, and the specific Difficulty & Witness Persona parameters below.
 
 ==================================================
 1. GLOBAL CLS MANDATORY RUBRIC (全域司法傳譯守則)
@@ -439,23 +362,23 @@ ${glossaryBlock ? "\n【本案專屬強制術語及評分要點 (Case-Specific G
 2. DYNAMIC TOLERANCE BY DIFFICULTY LEVEL (當前案件難度: LEVEL ${difficultyLevel})
 ==================================================
 - [IF LEVEL 1: FOUNDATIONAL - 入門奠基]:
-  * Assessment Focus: Strict baseline compliance. Zero tolerance on advocacy formulae ("I put it to you" -> "我向你指出") and basic legal terms. High scrutiny on dates, times, and numbers. Moderate tolerance on minor delivery hesitations.
+  * Assessment Focus: Strict baseline compliance. Zero tolerance on advocacy formulae ("I put it to you" -> "我向你指出") and basic numbers/dates. Moderate tolerance on minor delivery hesitations.
 - [IF LEVEL 2: OPERATIONAL TRIAL - 常規實戰]:
-  * Assessment Focus: Standard liaison proficiency under realistic courtroom speed. Strict scrutiny on past tense consistency for historical case facts and capturing counsel's control markers.
+  * Assessment Focus: Standard liaison proficiency under realistic courtroom speed. Strict scrutiny on past tense consistency, lawyer's control markers, and witness's defensive explanations.
 - [IF LEVEL 3: ADVANCED ADVERSARIAL - 進階高壓]:
-  * Assessment Focus: Cognitive stamina, legal maneuvering, and discourse management. High scrutiny on compound questions, double negatives, and dense factual clusters. Heavy deduction for "Garrulous Interpretation" or "Summary Paraphrasing" (omitting rapid details).
+  * Assessment Focus: Cognitive stamina, legal maneuvering, and discourse management. High scrutiny on compound questions, double negatives, and dense factual clusters. Heavy deduction for "Garrulous Interpretation" or "Summary Paraphrasing".
 
 ==================================================
 3. WITNESS PERSONA EVALUATION METRICS (當前證人模式: ${witnessPersona} | 場所: ${courtVenue})
 ==================================================
 - [IF PERSONA = street_combative (市井／情緒化證人)]:
-  * Check if the trainee conveys the defensive force, disbelief, or frustration into formal English. Flag if the trainee sanitizes street slangs (e.g. 砌生豬肉, 屈得就屈, 食死貓) into mild English instead of conveying the allegation of fabrication/framing.
+  * Check if the trainee conveys the defensive force, disbelief, or frustration into formal English. Flag if the trainee sanitizes street slangs (e.g., 砌生豬肉, 食死貓, 郁手郁腳, 大隻佬) into bland, academic English.
 - [IF PERSONA = elderly_garrulous (長者／囉嗦迂迴證人)]:
-  * Faithfulness vs. Unauthorized Summarization: In common law courts, the interpreter has NO authority to prune or edit out rambling witness evidence. If the trainee summarizes or omits circumstantial details, deduct from "accuracy" and flag in "improvements".
+  * Faithfulness vs. Unauthorized Summarization: In common law courts, the interpreter has NO authority to prune or edit out seemingly irrelevant details. If the trainee summarizes or omits circumstantial details, deduct heavily from "accuracy" and explicitly warn against "擅自刪減或撮要證人供詞".
 - [IF PERSONA = non_native (少數族裔／非地道語法證人)]:
-  * Semantic Decoding: Check if the trainee accurately extracts the witness's true intent behind inverted Cantonese grammar, while rendering grammatically coherent English for the Magistrate.
+  * Semantic Decoding: Check if the trainee accurately extracts the witness's true intent behind inverted Cantonese grammar without inventing facts.
 - [IF PERSONA = technical_tribunal (審裁處／技術檢驗證人)]:
-  * Zero-tolerance precision on metric units (毫米, 分貝, 平方呎), statutory percentages, wages in lieu of notice (代通知金), or accounting numbers.
+  * Zero-tolerance precision on metric units (毫米, 分貝, 平方呎), statutory percentages, wages in lieu of notice (代通知金), and accounting figures.
 
 ==================================================
 4. SCORING SCHEMA & FEEDBACK OUTPUT (1.0 to 5.0)
@@ -464,10 +387,10 @@ Evaluate across 4 distinct dimensions (1 decimal place):
 1. "accuracy" (準確度): Factual completeness, figures, dates, physical actions, and absence of unauthorized additions/omissions.
 2. "tone" (忠實度與語氣): Register fidelity, witness demeanor/defensiveness preservation, and court decorum.
 3. "legal" (法律合規性): Strict adherence to the CLS Rubric, mandatory cross-examination formulae, and tense compliance.
-4. "delivery" (流暢與儀態): Natural syntax, conciseness, absence of false starts or unforced hesitations.
+4. "delivery" (流暢與精練度): Natural syntax, conciseness, absence of false starts or unforced hesitations.
 
 Provide your feedback in Traditional Chinese (Hong Kong judicial style) with specific examples quoting the trainee's input.
-OUTPUT STRICTLY AS VALID JSON ONLY (No markdown codeblocks, no extra explanation text):
+IMPORTANT: Do NOT output any thinking process or markdown blocks. Return ONLY raw, valid JSON matching this exact schema:
 {
   "scores": {
     "accuracy": 4.5,
@@ -476,17 +399,11 @@ OUTPUT STRICTLY AS VALID JSON ONLY (No markdown codeblocks, no extra explanation
     "delivery": 4.2,
     "overall": 4.3
   },
-  "strengths": [
-    "具體優點 1 (精確引用學員譯文中處理出色的字詞/句式)",
-    "具體優點 2"
-  ],
-  "improvements": [
-    "具體改善建議 1 (明確指出漏譯或用詞不合 CLS 規範之處，並提供標準參考譯法)",
-    "具體改善建議 2"
-  ]
+  "strengths": ["具體優點 1 (精確引用學員譯文中處理出色的字詞/句式)", "具體優點 2"],
+  "improvements": ["具體改善建議 1 (明確指出漏譯或用詞不合 CLS 規範之處，並提供標準參考譯法)", "具體改善建議 2"]
 }`;
 
-        const userPrompt = `Court Venue: ${courtVenue === "tribunal" ? "Hong Kong Tribunal (審裁處)" : "Hong Kong Magistrates' Court / District Court"}
+        const userPrompt = `Court Venue: ${courtVenue === "tribunal" ? "Hong Kong Tribunal (審裁處)" : "Hong Kong Magistrates' Court (裁判法院)"}
 Difficulty Level: Level ${difficultyLevel}
 Witness Persona: ${witnessPersona}
 Direction: ${isEnSource ? "English Question -> Cantonese Interpretation" : "Cantonese Statement -> English Interpretation"}
@@ -536,140 +453,138 @@ Evaluate the trainee's input strictly against the CLS Rubric and return ONLY the
         };
     },
 
-    // 6. 分級與特種證人 20 輪自訂案件生成 API (支援場所、難度 Level 1-3、特種證人畫像及角色聲線配對)
+    // 6. OpenRouter GLM 20輪自訂案件生成 API (支援審訊場所、難易度 Level 1-3 及特種證人畫像)
     async generateCaseWithGLM(customBriefText, saveToCategory, apiToUse, preferredGlmModel = "z-ai/glm-4.5-air", genConfig = {}) {
         const venue = genConfig.venue || "magistrates";
         const difficulty = Number(genConfig.difficulty || 2);
         const persona = genConfig.persona || "street_combative";
-        const counselGender = genConfig.counselGender || "male";
-        const witnessGender = genConfig.witnessGender || "auto";
 
         const venueInstructions = venue === "tribunal"
-            ? `VENUE: HONG KONG TRIBUNALS (審裁處 - e.g., Labour Tribunal 勞資審裁處 / Lands Tribunal 土地審裁處 / Small Claims Tribunal 小額錢債審裁處).
-- Do NOT use "Prosecutor". Odd turns are spoken by the "Presiding Officer" (審裁官) or cross-examining "Claimant/Defendant Representative".
-- Even turns are spoken by the "Claimant" (申索人), "Defendant/Respondent" (受索人), or "Technical Witness".
-- Focus on statutory entitlements, wages in lieu of notice (代通知金), severance payment (遣散費), tenancy breaches, water seepage readings, or invoice calculations.`
+            ? `VENUE: HONG KONG TRIBUNALS (審裁處 e.g., Labour Tribunal 勞資審裁處 / Lands Tribunal 土地審裁處 / Small Claims Tribunal 小額錢債審裁處).
+Do NOT use "Prosecutor". Odd turns are spoken by the "Presiding Officer" (審裁官).
+Even turns are spoken by the "Claimant" (申索人), "Defendant" (被告), or "Technical Witness". Note: In spoken Hong Kong tribunal interpreting, refer to the opposing party directly as "被告" (Defendant), NOT "受索人".
+Focus on statutory entitlements, wages in lieu of notice (代通知金), severance payment (遣散費), tenancy breaches, water seepage readings, or invoice calculations.`
             : `VENUE: HONG KONG MAGISTRATES' COURTS / DISTRICT COURT (香港裁判法院 / 區域法院).
-- Scope: Summary & indictable offences (shop theft, AOABH, common assault, indecent assault, possession of drugs/weapons, obstructing police, money laundering).
-- Odd turns are spoken by "Prosecutor" (主控官) or "Defence Counsel" (辯方大律師).
-- Even turns are spoken by "Defendant" (被告), "Victim" (事主), or "Witness" (證人).`;
+Scope: Summary & indictable offences (shop theft, AOABH, common assault, indecent assault, possession of drugs/weapons, money laundering).
+Odd turns are spoken by "Prosecutor" (主控官) or "Defence Counsel" (辯方大律師).
+Even turns are spoken by "Defendant" (被告), "Victim" (事主), or "Witness" (證人).`;
 
         const difficultyInstructions = {
             1: `[SELECTED DIFFICULTY: LEVEL 1 - FOUNDATIONAL (入門奠基)]
-- Sentence Length: Short to medium (English: 15-25 words; Cantonese: 20-35 characters).
-- Information Density: Max 2 factual elements per turn.
-- Syntactic Complexity: Direct interrogative sentences. No double negatives.
-- Target Calibration: At least 3 clear numerical references across the 20 turns.`,
+Sentence Length: Short to medium (English: 15-25 words; Cantonese: 20-35 characters).
+Information Density: Max 2 verifiable factual elements per turn (e.g., 1 time + 1 action).
+Syntactic Complexity: Simple declarative or direct interrogative sentences. No embedded subordinate clauses or double negatives.
+Target Calibration: At least 3 clear numerical references across the 20 turns. Witness delivers direct answers without extensive evasion.`,
             2: `[SELECTED DIFFICULTY: LEVEL 2 - OPERATIONAL TRIAL (常規實戰)]
-- Sentence Length: Medium to long (English: 25-40 words; Cantonese: 35-60 characters).
-- Information Density: 3-4 factual elements per turn.
-- Syntactic Complexity: Multi-part cross-examination questions and witness explanations.
-- Target Calibration: At least 5 numerical/date/spatial references and 2 documentary contradictions.`,
+Sentence Length: Medium to long (English: 25-40 words; Cantonese: 35-60 characters).
+Information Density: 3-4 factual elements per turn (timeline juxtaposition, compound conditions).
+Syntactic Complexity: Counsel uses multi-part questions, introductory caveats, and confrontational propositions. Witness shows moderate defensiveness and explains away contradictions.
+Target Calibration: At least 5 numerical/date/spatial references and at least 2 contradictions based on written witness statements or cautioned interviews.`,
             3: `[SELECTED DIFFICULTY: LEVEL 3 - ADVANCED ADVERSARIAL (進階高壓)]
-- Sentence Length: Long, dense, high pressure (English: 40-60 words; Cantonese: 60-90+ characters).
-- Information Density: 5+ intertwined factual elements, rapid timeline shifts, and aggressive follow-up traps.
-- Syntactic Complexity: Compound questions, double negatives ("Is it not the case that you did not..."), and confrontational interruptions.
-- Target Calibration: Dense clusters of times, dollar amounts, measurements, and intense attacks on credibility.`
+Sentence Length: Long, dense, high pressure (English: 40-60 words; Cantonese: 60-90+ characters).
+Information Density: High cognitive load. 5+ intertwined factual elements, rapid timeline shifts, and aggressive follow-up traps.
+Syntactic Complexity: Counsel uses rapid-fire compound questions, double negatives ("Is it not the case that you did not..."), and confrontational propositions. Witness wanders, prevaricates, or strongly resists.
+Target Calibration: Dense clusters of phone numbers, vehicle registrations, exact dollar amounts, split-second timelines, and deep evidential confrontation (CCTV timestamp vs. memo book entry vs. oral evidence).`
         }[difficulty];
 
         const personaInstructions = {
-            standard: `[SELECTED WITNESS PERSONA: STANDARD WITNESS (常規證人)]
-- Natural spoken Hong Kong Cantonese, responsive but defensive when challenged.`,
+            standard: `[SELECTED WITNESS PERSONA: STANDARD WITNESS (常規標準證人)]
+Natural spoken Hong Kong Cantonese (use authentic spoken phrases like 突然醒起 / 叮一聲諗起 rather than bookish 猛然醒起), responsive but defensive when challenged.`,
             street_combative: `[SELECTED WITNESS PERSONA: STREET-LEVEL / HIGHLY COMBATIVE (市井／情緒化證人)]
-- Heavy use of authentic Hong Kong street idioms: 郁手郁腳, 砌生豬肉, 屈得就屈, 講笑咩, 食死貓, 大石砸死蟹, 吹水, 邊有啲噉嘅事.
-- Dense modal particles showing frustration: 囉, 㗎, 啫, 嘛, 吖嘛.
-- Tendency to answer with rhetorical counter-questions ("你問我我問邊個呀？").`,
+Profile: Typical local defendant or hawker/driver involved in street scuffles.
+Language Characteristics:
+- Heavy use of authentic Hong Kong street idioms: 郁手郁腳, 砌生豬肉, 屈得就屈, 講笑咩, 食死貓, 大石砸死蟹, 大隻佬 (instead of bookish 大漢), 吹水, 邊有啲噉嘅事.
+- Dense modal particles showing frustration or contempt: 囉, 㗎, 啫, 嘛, 吖嘛, 啦.
+- Tendency to answer questions with rhetorical counter-questions: "你問我我問邊個呀？", "你有冇搞錯呀？"`,
             elderly_garrulous: `[SELECTED WITNESS PERSONA: GARRULOUS & CIRCUMSTANTIAL ELDERLY (長者／囉嗦迂迴證人)]
-- Witness is an elderly person (65+ years old). Chronologically slightly rambling, includes circumstantial or personal background details ("我幾十歲人點會記錯", "嗰朝早天矇光我落街買餸嗰陣..."), and uses colloquial temporal markers before answering the core question.
-- Ensure the target English translation ("targetText_en") faithfully translates ALL rambling details without summarizing them.`,
+Profile: Elderly victim, neighbourhood witness, or long-time tenant (65+ years old).
+Language Characteristics:
+- Chronologically slightly rambling, provides circumstantial or familial details before answering the actual question.
+- Repeats subjective impressions ("我幾十歲人點會呃你", "我眼矇心唔矇呀").
+- Uses colloquial temporal markers: "天矇光嗰陣", "八點三個字", "差唔多食晏時間".
+- Ensure the target English translation ("targetText_en") faithfully translates ALL rambling details without summarizing or pruning.`,
             non_native: `[SELECTED WITNESS PERSONA: NON-NATIVE CANTONESE SPEAKER (少數族裔／非地道廣東話證人)]
-- Witness is a non-Chinese resident speaking colloquial Hong Kong Cantonese with slightly simplified connectors, occasional code-mixing of basic English words (e.g. "我嗰陣時喺個shop入面check緊貨"), and slightly inverted syntax, while targetText_en renders coherent court English.`,
+Profile: South Asian or foreign national testifying in colloquial Hong Kong Cantonese.
+Language Characteristics:
+- Slightly inverted syntax, missing prepositions, simplified grammatical connectors.
+- Occasional insertion of basic English workplace terms inside Cantonese sentences (e.g., "我嗰陣時做緊 delivery 吖嘛，個 boss 叫我擺低先").`,
             technical_tribunal: `[SELECTED WITNESS PERSONA: TECHNICAL / INSPECTION WITNESS (審裁處／專家技術證人)]
-- Objective, methodical, dense with measurement units (厘米, 毫米, 分貝, 平方呎, 濕度百分比) or accounting/contract figures.`
+Profile: Building surveyor, Labour inspection officer, accountant, or technical claimant.
+Language Characteristics:
+- Objective, methodical, accounting or measurement-focused.
+- Heavy density of measurement units (厘米, 毫米, 滲水讀數, 分貝, 平方呎) or statutory entitlement calculations (代通知金, 遣散費, 平均日薪公式).`
         }[persona] || "";
-
-        const genderInstruction = witnessGender === "auto"
-            ? `Infer the appropriate gender ("male" or "female") of the Witness/Victim/Defendant from the Case Fact Brief (e.g., if it is an indecent assault case with a female victim testifying, witness_gender MUST be "female").`
-            : `The Witness/Victim/Defendant gender MUST be "${witnessGender}".`;
 
         const systemPrompt = `You are a Principal Court Interpreter Trainer and Senior Training Officer of the Court Language Section (CLS) of the Hong Kong Judiciary.
 
 MISSION
-Convert the supplied Case Fact Brief into an immersive 20-turn Hong Kong courtroom/tribunal liaison-interpreting simulation.
+You are designing a professional courtroom liaison-interpreting training exercise for serving Court Interpreters.
+Convert the supplied Case Fact Brief into an immersive 20-turn Hong Kong courtroom/tribunal simulation strictly calibrated to the selected Venue, Difficulty Level, and Witness Persona below.
 
---------------------------------------------------
+==================================================
 1. VENUE & FORUM CALIBRATION
---------------------------------------------------
+==================================================
 ${venueInstructions}
 
---------------------------------------------------
+==================================================
 2. DIFFICULTY LEVEL CALIBRATION
---------------------------------------------------
+==================================================
 ${difficultyInstructions}
 
---------------------------------------------------
-3. WITNESS PERSONA PROFILE
---------------------------------------------------
+==================================================
+3. WITNESS PERSONA PROFILE (EVEN TURNS)
+==================================================
 ${personaInstructions}
 
---------------------------------------------------
-4. VOICE & GENDER CONSISTENCY METADATA
---------------------------------------------------
-- Counsel / Presiding Officer gender: "${counselGender}"
-- ${genderInstruction}
-- If the witness persona is "elderly_garrulous", set "witness_age_group": "elderly". Otherwise set "adult" or "young".
-
---------------------------------------------------
-5. MANDATORY TURN STRUCTURE & LANGUAGE RULES
---------------------------------------------------
-- Turns 1-4: Foundation Evidence (Identity, relationship, location, date, timeline).
-- Turns 5-8: Material Time (Sequence of events, physical actions; repeatedly use "I put it to you that...", "I suggest to you that...", "At the material time...").
-- Turns 9-12: Documentary / Electronic Evidence (CCTV, WhatsApp, bank records, medical/inspection reports, contracts).
-- Turns 13-16: Contradictions ("Do you agree that...", "Is it your evidence that...", "I challenge your assertion...").
-- Turns 17-20: Ultimate Challenge & strong witness resistance.
+==================================================
+4. MANDATORY TURN STRUCTURE & LANGUAGE RULES
+==================================================
+Turns 1-4: Foundation Evidence (Identity, relationship between parties, location, date, timeline).
+Turns 5-8: Material Time (Sequence of events, physical actions, positioning; repeatedly use "I put it to you that...", "I suggest to you that...", "At the material time...").
+Turns 9-12: Documentary / Electronic Evidence (CCTV footage, WhatsApp/Signal records, bank records, punch-cards, medical/inspection reports, contracts).
+Turns 13-16: Contradictions ("Do you agree that...", "Is it your evidence that...", "I challenge your assertion...").
+Turns 17-20: Ultimate Challenge & strong witness resistance.
 
 MANDATORY TRANSLATION EQUIVALENTS (Odd Turns targetText_zh):
 - "I put it to you that..." → "我向你指出……"
 - "I suggest to you that..." → "我向你提出／指出……"
 - "At the material time..." → "喺案發嗰陣／喺關鍵時間……"
-- Strictly Traditional Chinese (Hong Kong judicial spoken Cantonese). No Mainland legal terms.
+- "Reasonable grounds to believe" → "合理理由相信"
+Strictly Traditional Chinese (Hong Kong judicial spoken Cantonese register). Never use Mainland legal terminology or bookish written Chinese (書面語).
 
-DATA MAPPING MATRIX RULES:
-1. Generate EXACTLY 20 turns (Turns 1 to 20).
-2. Return ONLY raw, valid JSON. No markdown fences.
-3. For Odd Turns (en-US):
-   - "text_en": English question.
-   - "targetText_zh": Cantonese court translation.
-   - "text_zh" and "targetText_en": Identical to "text_en".
-   - "gender": "${counselGender}"
-4. For Even Turns (zh-HK):
-   - "text_zh": Cantonese witness statement.
-   - "targetText_en": Faithful court English translation.
-   - "text_en" and "targetText_zh": Identical to "text_zh".
-   - "gender": Must match "voice_config.witness_gender".
+==================================================
+5. OUTPUT FORMAT REQUIREMENTS (STRICT JSON)
+==================================================
+1. Generate EXACTLY 20 turns (Turns 1 to 20). No truncation.
+2. Return ONLY raw, valid JSON. Never enclose in markdown fences, no introductory or concluding prose.
+3. DATA MAPPING MATRIX RULES:
+   - For Odd Turns (en-US):
+     "lang": "en-US"
+     "text_en": English question.
+     "targetText_zh": Authoritative Cantonese court translation.
+     "text_zh" and "targetText_en": Must be identical to "text_en".
+   - For Even Turns (zh-HK):
+     "lang": "zh-HK"
+     "text_zh": Cantonese witness statement.
+     "targetText_en": Faithful, court-ready English translation (do NOT sanitize or summarize).
+     "text_en" and "targetText_zh": Must be identical to "text_zh".
 
 STRICT OUTPUT JSON SCHEMA:
 {
-  "title_zh": "自訂 ➜ [案件名稱 (中文)]",
-  "title_en": "Custom ➜ [Case Title (English)]",
+  "title_zh": "${venue === "tribunal" ? "審裁處" : "裁判法院"} ➜ [Level ${difficulty}] [案件名稱 (中文)]",
+  "title_en": "${venue === "tribunal" ? "Tribunal" : "Magistrates' Courts"} ➜ [Level ${difficulty}] [Case Title (English)]",
   "category": "${saveToCategory}",
   "venue": "${venue}",
   "difficulty": ${difficulty},
   "persona": "${persona}",
-  "voice_config": {
-    "counsel_gender": "${counselGender}",
-    "witness_gender": "female",
-    "witness_age_group": "${persona === "elderly_garrulous" ? "elderly" : "adult"}"
-  },
-  "desc_zh": "[案件背景及訓練重點簡介 (中文)]",
+  "desc_zh": "[案件背景、難度及證人特質訓練重點簡介 (中文)]",
   "desc_en": "[Case Brief & Training Focus (English)]",
-  "cls_guidelines": "[列出 3-5 個本案專屬關鍵術語及評分標準]",
+  "cls_guidelines": "[列出 3-5 個本案專屬關鍵術語、地道俚語對位及評分標準]",
   "dialogue": [
     {
       "turn": 1,
-      "role_zh": "主控官",
-      "role_en": "Prosecutor",
-      "gender": "${counselGender}",
+      "role_zh": "${venue === "tribunal" ? "審裁官" : "主控官"}",
+      "role_en": "${venue === "tribunal" ? "Presiding Officer" : "Prosecutor"}",
       "lang": "en-US",
       "text_zh": "English question",
       "text_en": "English question",
@@ -682,7 +597,7 @@ STRICT OUTPUT JSON SCHEMA:
         const { rawContent, usedModel } = await this.callOpenRouterChatWithFallback(
             [
                 { role: "system", content: systemPrompt },
-                { role: "user", content: "Case Fact Brief:\n" + customBriefText + "\n\nGenerate the full 20-turn JSON now based strictly on the calibrated Venue, Difficulty Level, Witness Persona, and Voice Gender rules." }
+                { role: "user", content: "Case Fact Brief:\n" + customBriefText + "\n\nGenerate the full 20-turn JSON now based strictly on the system instructions." }
             ],
             apiToUse,
             preferredGlmModel,
@@ -698,77 +613,53 @@ STRICT OUTPUT JSON SCHEMA:
             throw new Error("Invalid dialogue array in returned JSON");
         }
 
-        const resolvedWitnessGender = parsed.voice_config?.witness_gender || (witnessGender === "auto" ? "female" : witnessGender);
-        const resolvedAgeGroup = parsed.voice_config?.witness_age_group || (persona === "elderly_garrulous" ? "elderly" : "adult");
-
-        // 確保每一題都寫入一致的 gender 與 age_group，杜絕語音打包時男女聲跳躍
-        const normalizedDialogue = parsed.dialogue.map((t, idx) => {
-            const isOdd = (t.turn || (idx + 1)) % 2 === 1;
-            return {
-                ...t,
-                gender: isOdd ? counselGender : resolvedWitnessGender,
-                age_group: isOdd ? "adult" : resolvedAgeGroup
-            };
-        });
-
         return {
             id: "custom_" + Date.now(),
-            title_zh: parsed.title_zh || ("自訂 ➜ [L" + difficulty + "] AI 生成模擬審訊案"),
+            title_zh: parsed.title_zh || ("自訂 ➜ [Level " + difficulty + "] AI (" + usedModel + ") 生成模擬審訊案"),
             title_en: parsed.title_en || "Custom ➜ AI Generated Mock Trial",
             category: saveToCategory,
             venue: parsed.venue || venue,
-            difficulty: parsed.difficulty || difficulty,
+            difficulty: Number(parsed.difficulty || difficulty),
             persona: parsed.persona || persona,
-            voice_config: {
-                counsel_gender: counselGender,
-                witness_gender: resolvedWitnessGender,
-                witness_age_group: resolvedAgeGroup
-            },
             desc_zh: parsed.desc_zh || "由 AI 自動生成的 20 輪法庭雙向傳譯練習。",
             desc_en: parsed.desc_en || "20-turn courtroom liaison interpreting exercise generated by AI.",
             cls_guidelines: parsed.cls_guidelines || "",
-            dialogue: normalizedDialogue
+            dialogue: parsed.dialogue
         };
     },
 
-    // 7. 離線模擬試題生成器 (無 API Key 時備援)
+    // 7. 離線模擬試題生成器 (無 API Key 時備援，同樣記錄 venue / difficulty / persona)
     generateLocalMockCase(customBriefText, saveToCategory, genConfig = {}) {
         const detectedLocations = customBriefText.match(/(旺角|尖沙咀|銅鑼灣|大圍|荃灣|沙田)/g) || ["旺角"];
         const location = detectedLocations[0];
         const detectedKeywords = customBriefText.match(/(非禮|打|踩|摸|太空油|毒品|合約|借據|代通知金|漏水)/g) || ["非禮及襲擊"];
         const incident = detectedKeywords[0];
-
-        const counselGender = genConfig.counselGender || "male";
-        const witnessGender = genConfig.witnessGender === "auto" ? "female" : (genConfig.witnessGender || "female");
-        const ageGroup = genConfig.persona === "elderly_garrulous" ? "elderly" : "adult";
+        const venue = genConfig.venue || "magistrates";
+        const difficulty = Number(genConfig.difficulty || 2);
+        const persona = genConfig.persona || "street_combative";
 
         return {
             id: "custom_" + Date.now(),
-            title_zh: "自訂 ➜ 模擬" + location + incident + "審訊案 (L" + (genConfig.difficulty || 2) + ")",
-            title_en: "Custom ➜ Mock " + location + " Trial",
+            title_zh: "自訂 ➜ [Level " + difficulty + "] 模擬" + location + incident + "審訊案",
+            title_en: "Custom ➜ [Level " + difficulty + "] Mock " + location + " Trial",
             category: saveToCategory,
-            venue: genConfig.venue || "magistrates",
-            difficulty: Number(genConfig.difficulty || 2),
-            persona: genConfig.persona || "street_combative",
-            voice_config: {
-                counsel_gender: counselGender,
-                witness_gender: witnessGender,
-                witness_age_group: ageGroup
-            },
-            desc_zh: "自動根據導入案情要素生成的對抗式中英雙向交替口譯考卷。",
-            desc_en: "Automatically assembled court liaison simulation based on loaded details.",
-            cls_guidelines: "1. I suggest to you -> 我向你指出\n2. 砌生豬肉 -> frame me up / fabricate allegations",
+            venue: venue,
+            difficulty: difficulty,
+            persona: persona,
+            desc_zh: "自動根據導入案情要素生成的 10 輪對抗式中英雙向交替口譯考卷。",
+            desc_en: "Automatically assembled 10-turn court liaison simulation based on loaded details.",
+            cls_guidelines: "1. 'I suggest to you' -> 我向你指出\n2. 砌生豬肉 -> frame me up / fabricate charges",
             dialogue: [
-                { turn: 1, role_zh: "主控官", role_en: "Prosecutor", gender: counselGender, lang: "en-US", text_zh: "At the material time, you were present at the corridor in " + location + " at approximately 9:30 p.m., correct?", text_en: "At the material time, you were present at the corridor in " + location + " at approximately 9:30 p.m., correct?", targetText_zh: "喺案發嗰陣，你喺大約夜晚九點半出現喺" + location + "嘅走廊通道，係咪？", targetText_en: "At the material time, you were present at the corridor in " + location + " at approximately 9:30 p.m., correct?" },
-                { turn: 2, role_zh: "事主 / 證人", role_en: "Witness", gender: witnessGender, age_group: ageGroup, lang: "zh-HK", text_zh: "我當時行得好急去搭車，根本無留意到邊個企喺我左後方囉！", text_en: "I was walking very hastily to take transport, I didn't notice at all who was standing behind my left rear!", targetText_zh: "我當時行得好急去搭車，根本無留意到邊個企喺我左後方囉！", targetText_en: "I was walking very hastily to catch the train, and did not pay any attention at all to who was standing at my left rear!" },
-                { turn: 3, role_zh: "主控官", role_en: "Prosecutor", gender: counselGender, lang: "en-US", text_zh: "The victim felt a physical pressure on her intimate part. What was your arm position at that moment?", text_en: "The victim felt a physical pressure on her intimate part. What was your arm position at that moment?", targetText_zh: "受害人當時感覺到佢嘅敏感部位受到身體壓迫。你當時對手喺咩位置？", targetText_en: "The victim felt a physical pressure on her intimate part. What was your arm position at that moment?" },
-                { turn: 4, role_zh: "事主 / 證人", role_en: "Witness", gender: witnessGender, age_group: ageGroup, lang: "zh-HK", text_zh: "我兩隻手都拎住嘢，一邊夾住胳肋底，點會有手去非禮佢呢？！", text_en: "Both of my hands were carrying things, with one side tucked under my armpit, how could I have an extra hand to indecently assault her?!", targetText_zh: "我兩隻手都拎住嘢，一邊夾住胳肋底，點會有手去非禮佢呢？！", targetText_en: "Both of my hands were holding things, with one tucked under my armpit, how could I have a free hand to indecently assault her?!" },
-                { turn: 5, role_zh: "主控官", role_en: "Prosecutor", gender: counselGender, lang: "en-US", text_zh: "After she confronted you, did you yell, 'Do you believe I will hit you' in an angry tone?", text_en: "After she confronted you, did you yell, 'Do you believe I will hit you' in an angry tone?", targetText_zh: "喺佢同你理論之後，你係咪好憤怒噉對佢大叫「你信唔信我打你」？", targetText_en: "After she confronted you, did you yell, 'Do you believe I will hit you' in an angry tone?" },
-                { turn: 6, role_zh: "事主 / 證人", role_en: "Witness", gender: witnessGender, age_group: ageGroup, lang: "zh-HK", text_zh: "我只係一時衝口而出，因為佢無端端踩我鞋踭、仲大聲屈我摸佢籮柚！", text_en: "I only blurted it out impulsively, because she accidentally stepped on the back of my shoes for no reason and loudly framed me for touching her bottom!", targetText_zh: "我只係一時衝口而出，因為佢無端端踩我鞋踭、仲大聲屈我摸佢籮柚！", targetText_en: "I only blurted it out in a moment of anger, because she stepped on my shoe back for no reason and loudly accused me of touching her buttocks!" },
-                { turn: 7, role_zh: "辯方大律師", role_en: "Defense Counsel", gender: counselGender, lang: "en-US", text_zh: "I suggest that the allegation of indecent assault was entirely fabricated to vent your anger over the queue dispute.", text_en: "I suggest that the allegation of indecent assault was entirely fabricated to vent your anger over the queue dispute.", targetText_zh: "我向你指出，非禮嘅指控完全係你捏造出嚟，純粹係為咗發洩你對排隊糾紛嘅不滿。 ", targetText_en: "I suggest that the allegation of indecent assault was entirely fabricated to vent your anger over the queue dispute." },
-                { turn: 8, role_zh: "事主 / 證人", role_en: "Witness", gender: witnessGender, age_group: ageGroup, lang: "zh-HK", text_zh: "我絕對唔同意。我事後即刻報告地鐵職員，有晒閉路電視，我唔會拿清白講笑！", text_en: "I absolutely disagree. I reported to the MTR staff immediately afterwards, there's CCTV everywhere, I won't joke with my innocence!", targetText_zh: "我絕對唔同意。我事後即刻報告地鐵職員，有晒閉路電視，我唔會拿清白講笑！", targetText_en: "I absolutely disagree. I reported the matter to MTR staff immediately afterwards, there was CCTV, and I would not joke with my reputation!" },
-                { turn: 9, role_zh: "辯方大律師", role_en: "Defense Counsel", gender: counselGender, lang: "en-US", text_zh: "Under the guidelines, any body contact through clothing can still be highly ambiguous. Is it possible it was just a normal brush?", text_en: "Under the guidelines, any body contact through clothing can still be highly ambiguous. Is it possible it was just a normal brush?", targetText_zh: "喺相關指引下，隔住衣物嘅身體接觸都可以好模糊。當時係咪有可能只係普通擦過？", targetText_en: "Under the guidelines, any body contact through clothing can still be highly ambiguous. Is it possible it was just a normal brush?" },
-                { turn: 10, role_zh: "事主 / 證人", role_en: "Witness", gender: witnessGender, age_group: ageGroup, lang: "zh-HK", text_zh: "絕對唔係。個觸碰好大力，而且係揸咗幾下，點會係唔小心擦過？！", text_en: "Absolutely not. The touching was very forceful and it was squeezed several times, how could it be an accidental brush?!", targetText_zh: "絕對唔係。個觸碰好大力，而且係揸咗幾下，點會係唔小心擦過？！", targetText_en: "Absolutely not. The touch was very hard and it was squeezed several times, how could it be an accidental brush?!" }
+                { turn: 1, role_zh: "主控官", role_en: "Prosecutor", lang: "en-US", text_zh: "Mr. Chan, I suggest to you that you were present at the corridor in " + location + " at approximately 9:30 p.m., correct?", text_en: "Mr. Chan, I suggest to you that you were present at the corridor in " + location + " at approximately 9:30 p.m., correct?", targetText_zh: "陳先生，我向你指出，你喺大約夜晚九點半嘅時候，出現喺" + location + "嘅走廊通道，係咪？", targetText_en: "Mr. Chan, I suggest to you that you were present at the corridor in " + location + " at approximately 9:30 p.m., correct?" },
+                { turn: 2, role_zh: "事主 / 證人", role_en: "Witness", lang: "zh-HK", text_zh: "我當時行得好急去搭車，根本無留意到邊個企喺我左後方囉！", text_en: "I was walking very hastily to take transport, I didn't notice at all who was standing behind my left rear!", targetText_zh: "我當時行得好急去搭車，根本無留意到邊個企喺我左後方囉！", targetText_en: "I was walking very hastily to catch the train, and did not pay any attention at all to who was standing at my left rear!" },
+                { turn: 3, role_zh: "主控官", role_en: "Prosecutor", lang: "en-US", text_zh: "The victim felt a physical pressure on her intimate part. What was your arm position at that moment?", text_en: "The victim felt a physical pressure on her intimate part. What was your arm position at that moment?", targetText_zh: "受害人當時感覺到佢嘅敏感部位受到身體壓迫。你當時對手喺咩位置？", targetText_en: "The victim felt a physical pressure on her intimate part. What was your arm position at that moment?" },
+                { turn: 4, role_zh: "事主 / 證人", role_en: "Witness", lang: "zh-HK", text_zh: "我兩隻手都拎住嘢，一邊夾住胳肋底，點會有手去非禮佢呢？！", text_en: "Both of my hands were carrying things, with one side tucked under my armpit, how could I have an extra hand to indecently assault her?!", targetText_zh: "我兩隻手都拎住嘢，一邊夾住胳肋底，點會有手去非禮佢呢？！", targetText_en: "Both of my hands were holding things, with one tucked under my armpit, how could I have a free hand to indecently assault her?!" },
+                { turn: 5, role_zh: "主控官", role_en: "Prosecutor", lang: "en-US", text_zh: "After she confronted you, did you yell, 'Do you believe I will hit you' in an angry tone?", text_en: "After she confronted you, did you yell, 'Do you believe I will hit you' in an angry tone?", targetText_zh: "喺佢同你理論之後，你係咪好憤怒噉對佢大叫「你信唔信我打你」？", targetText_en: "After she confronted you, did you yell, 'Do you believe I will hit you' in an angry tone?" },
+                { turn: 6, role_zh: "事主 / 證人", role_en: "Witness", lang: "zh-HK", text_zh: "我只係一時衝口而出，因為佢無端端踩我鞋踭、仲大聲屈我摸佢籮柚！", text_en: "I only blurted it out impulsively, because she accidentally stepped on the back of my shoes for no reason and loudly framed me for touching her bottom!", targetText_zh: "我只係一時衝口而出，因為佢無端端踩我鞋踭、仲大聲屈我摸佢籮柚！", targetText_en: "I only blurted it out in a moment of anger, because she stepped on my shoe back for no reason and loudly accused me of touching her buttocks!" },
+                { turn: 7, role_zh: "辯方大律師", role_en: "Defense Counsel", lang: "en-US", text_zh: "I suggest that the allegation of indecent assault was entirely fabricated to vent your anger over the queue dispute.", text_en: "I suggest that the allegation of indecent assault was entirely fabricated to vent your anger over the queue dispute.", targetText_zh: "我向你指出，非禮嘅指控完全係你捏造出嚟，純粹係為咗發洩你對排隊糾紛嘅不滿。 ", targetText_en: "I suggest that the allegation of indecent assault was entirely fabricated to vent your anger over the queue dispute." },
+                { turn: 8, role_zh: "事主 / 證人", role_en: "Witness", lang: "zh-HK", text_zh: "我絕對唔同意。我事後即刻報告地鐵職員，有晒閉路電視，我唔會拿清白講笑！", text_en: "I absolutely disagree. I reported to the MTR staff immediately afterwards, there's CCTV everywhere, I won't joke with my innocence!", targetText_zh: "我絕對唔同意。我事後即刻報告地鐵職員，有晒閉路電視，我唔會拿清白講笑！", targetText_en: "I absolutely disagree. I reported the matter to MTR staff immediately afterwards, there was CCTV, and I would not joke with my reputation!" },
+                { turn: 9, role_zh: "辯方大律師", role_en: "Defense Counsel", lang: "en-US", text_zh: "Under the guidelines, any body contact through clothing can still be highly ambiguous. Is it possible it was just a normal brush?", text_en: "Under the guidelines, any body contact through clothing can still be highly ambiguous. Is it possible it was just a normal brush?", targetText_zh: "喺相關指引下，隔住衣物嘅身體接觸都可以好模糊。當時係咪有可能只係普通擦過？", targetText_en: "Under the guidelines, any body contact through clothing can still be highly ambiguous. Is it possible it was just a normal brush?" },
+                { turn: 10, role_zh: "事主 / 證人", role_en: "Witness", lang: "zh-HK", text_zh: "絕對唔係。個觸碰好大力，而且係揸咗幾下，點會係唔小心擦過？！", text_en: "Absolutely not. The touching was very forceful and it was squeezed several times, how could it be an accidental brush?!", targetText_zh: "絕對唔係。個觸碰好大力，而且係揸咗幾下，點會係唔小心擦過？！", targetText_en: "Absolutely not. The touch was very hard and it was squeezed several times, how could it be an accidental brush?!" }
             ]
         };
     },
